@@ -1,0 +1,1004 @@
+---
+title: "THERA BANK - Loan Purchase Modeling"
+author: "Rajeev"
+date: "9/11/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, cache = F}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+
+#THERA BANK - Loan Purchase Modeling
+Thera Bank has a growing customer base with majority of their customers being liability customers (depositors). The management wants to explore ways of converting its liability customers to personal loan customers (while retaining them as depositors) and in the process earn more through the interests on the loan. 
+A campaign that the bank ran last year for liability customers showed a healthy conversion rate of over 9% success. The department wants to build a model that will help them identify the potential customers who have a higher probability of purchasing the loan. This will increase the success ratio while at the same time reduce the cost of the campaign.
+
+## 1. Project Objective
++ Build a model from the dataset of previous years campaign to identify the potential customers who have a higher probability of purchasing the loan.
++ Increase the success ratio while at the same time reduce the cost of the campaign. 
++ Build the best model which can classify the right customers who have a higher probability of purchasing the loan.
+
+## 2.Data Dictionary
+
+### Load Packages
+
+```{r warning = FALSE, message = FALSE}
+library(readxl) # read excel file
+library(ggplot2) # For graphs and visualisations
+library(gridExtra) # To plot multiple ggplot graphs in a grid
+library(DataExplorer) # To plot correlation plot between numerical variables
+library(caTools) # Split Data into Test and Train Set
+library(rpart) # To build CART decision tree
+library(rattle) # To visualise decision tree
+library(randomForest) # To build a Random Forest
+library(ROCR) # To visualise the performance classifiers
+library(ineq) # To calculate Gini
+library(InformationValue) # For Concordance-Discordance
+library(dplyr) # for data manipulation
+library(readr)#to read data
+library(NbClust) # to find optimal number of clusters
+library(xml2) # to work with XML files
+library(rvest) #to harvest data 
+library(stringr) # #to work with strings
+library(dplyr) #for data manipulation
+library(psych) #for multivariate analysis
+library(factoextra) #to extract & visualize multivariate analysis
+library(cluster) #to form clusters for K Means
+library(caret) #for multifunction training and plotting 
+library(rpart) #for splitting data intos ubsets and further split
+library(RColorBrewer) # for sensible color schemes
+library(rattle) #for grphical user interface
+```
+
+## 3. Import Data
+```{r include=FALSE}
+TB_Data=read_excel("Thera Bank_Personal_Loan_Modelling-dataset.xlsx")
+```
+
+## 4. Exploratory Data Analysis
+
+### Check the dimension of the dataset
+```{r warning=FALSE}
+dim(TB_Data)
+```
+The Dataset has 5000 rows & 14 columns
+
+
+### Sanity Checks
+
+```{r}
+# Look at the first and last few rows to ensure that the data is read in properly
+head(TB_Data)
+tail(TB_Data)
+```
+Values in all fields are consistent in each column.
+
+
+### Check the structure of dataset
+```{r}
+str(TB_Data)
+```
+Observations:
+
+1. ID is an identity variable and not useful for predictive modeling
+
+2. Personal Loan is the response variable and is a numerical variable which may be needed to changed to a factor
+
+3. All the other variable are numerical variables as they should be
+
+
+### Get Summary of the dataset
+```{r}
+summary(TB_Data)
+```
+
+Obervations:
+1. ID is a identity variable can should be dropped
+2. Age has a huge range from 23 to 67
+3. Corresponding to the age is the huge range in their professional work experience
+4. Annual Incomes range from as low as 8000 right up to 224,000. The income distribution is positively skewed.
+5. ZIP Code is the Home address code and not a useful variable for predictive modeling for this data. This variable shoud be dropped.
+6. Family Members range between 1 & 4. The distribution is negative skewed. There are 18 NA's which mean the data from 18 Age variables are missing.
+7. The average spending on the Credit Card per month ranges from 0 to 10,000. There seem to be many outliers as the mean is 1,500 & median is 1,938. the 3rd Quartile is only 2,500.
+8. Education Level Range from Under Graduates to Graduates to Professionals. The range seems spread out.
+9. The value of house Mortgage is completely right skewed. The median here is 0 while mean is 56,500 stretching right up to 635,000.
+10. Customer who accepted Personal Loan offered in the last campaign is 9.6%
+11. Customers having security accounts in Thera Bank is around 10.5%
+12. Customers having Certificate of Deposit accounts in Thera Bank is around 6%
+13. Customers using internet banking facility is close to 60%
+14. Customer using There Bank credit card is around 29.5%
+
+
+### Change column names
+```{r warning=FALSE}
+colnames(TB_Data)[colnames(TB_Data)%in% c("Age (in years)", 
+                                          "Experience (in years)",
+                                          "Income (in K/month)", 
+                                          "ZIP Code",
+                                          "Familymembers",
+                                          "PersonalLoan")]=
+  c("Age", "Experience","Income", "zip","FamilyMember", "PersonalLoan")
+```
+
+There seem to be use of symbols like 'brackets' and space used in the column names which could create error in reading while performing test at various levels. Hence we remove the brackets with the info in them & space between names.
+
+
+
+### Drop insignificant columns
+```{r}
+TB_Data=subset(TB_Data, select = -c(ID,zip))
+dim(TB_Data)
+```
+The data now has 5000 rows and 12 columns
+
+
+### Missing value treatment
+```{r}
+sum(is.na(TB_Data))
+colSums(is.na(TB_Data))
+colnames(TB_Data)[apply(TB_Data, 2, anyNA)]
+TB_Data$FamilyMember[is.na(TB_Data$FamilyMember)]=median(TB_Data$FamilyMember,na.rm = TRUE)
+anyNA(TB_Data)
+```
+Observations:
+1. The treatment shows 18 values in the "Family members" column missing (NA's)
+2. All NA's are replaced using the median of the "Family member" column 
+3. There are no missing values in the Data
+
+
+### Univariate analysis
+```{r warning=FALSE}
+#Distribution of the dependent variable
+prop.table(table(TB_Data$PersonalLoan))
+```
+1. 9.6% of the total customers accepted the Personal Loan in the last campaign. We need to determine factors that drive customers to accept the Personal Loan so that we suggest measure to increase the percentage of customers accepting the Personal Loan.
+2. We will also create models that will help us accurately predict "Potential Customers" for Personal Loans.
+
+####  Function to draw histogram and boxplot of numerical variables using ggplot
+```{r}
+
+plot_histogram_n_boxplot = function(variable, variableNameString, binw){
+  h = ggplot(data = TB_Data, aes(x= variable))+
+    labs(x = variableNameString,y ='count')+
+    geom_histogram(fill = 'green',col = 'white',binwidth = binw)+
+    geom_vline(aes(xintercept=mean(variable)),
+               color="black", linetype="dashed", size=0.5)
+  b = ggplot(data = TB_Data, aes('',variable))+ 
+    geom_boxplot(outlier.colour = 'red',col = 'red',outlier.shape = 19)+
+    labs(x = '',y = variableNameString)+ coord_flip()
+  grid.arrange(h,b,ncol = 2)
+}
+```
+
+
+a. Observations on Age
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$Age, 'Age', 1)
+```
+1. As seen in summary the range is huge i.e. between 23 & 67
+2. The mean & median are both around 45.
+
+
+b. Observations on Experience
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$Experience, 'Experience', 1)
+```
+1. Proportionate to the Age, the work experiences of the customers also has a wide range.
+2. The mean & median experience is at 20.
+3. A few are also showing lack of experience.
+
+
+c. Observations on Income
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$Income, 'Income', 1)
+```
+1. Annual Income levels range from as low as 8000 and stretch beyond 200,000 with 2 outliers beyond it.
+2. The data is right skewed and has two peaks at around 40,000 and 80,000 range.
+3. Can see small concentration at 190,00 & 200,00 ranges.
+
+
+d. Observations on Family Members
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$FamilyMember, 'Family Member', 1)
+```
+1. Family Members range between 1 to 4, with most with 1 family member, followed by 2 and 4.
+2. There are 18 values missing in the data for Age
+
+
+e. Observations on Average spending on Credit Card per month
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$CCAvg, 'CCAvg', 1)
+```
+
+1. Data is right skewed with a peak at around 1000
+2. There are many customers who do not use their Credit Card
+3. There are many customers who spend a large amount on their credit card monthly compared to others.
+4. The people spending higher on their credit card are spending in the range of 5000 to 9000 monthly.
+
+
+f. Observations on Customer Education Level
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$Education, 'Education', 1)
+```
+
+1. There are three levels of Education in the data i.e. 1=Undergraduate, 2=Graduate & 3=Advanced/Professionals.
+2. Maximum customers are Undergraduates. There are more Advanced professionals in the data compared to the Graduates.
+
+g. Observations on Customer with Mortgage (and value of Mortage)
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$Mortgage, 'Mortage', 1)
+```
+
+1. Most of the customers do not have Mortgage on their house.
+2. The maximum Mortgage values are between 250,000 to 500,00
+
+h. Observations on Customer who accepted the Personal Loan during the last campaign
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$`PersonalLoan`, 'Personal Loan', 1)
+```
+
+1. Only 9.5% of the customer base seem to have accepted the Personal Loan
+
+
+
+i. Observations on Customer having Security Account with the bank
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$`SecuritiesAccount`, 'Security Account', 1)
+```
+
+1. Around 10.5% of customers have Security Account
+
+
+j. Observations on Customer having Certificate of Deposit Account with the bank
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$`CDAccount`, 'CD Account', 1)
+```
+
+1. Around 6% of customers have CD Account
+
+
+k. Observations on Customer using Internet Banking
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$Online, 'Online', 1)
+```
+
+1. Almost 60% of customer use Internet Banking
+
+l. Observations on Customer using Thera Bank Credit Card
+
+```{r}
+plot_histogram_n_boxplot(TB_Data$CreditCard, 'Credit Card', 1)
+```
+
+1. Almost 30% customer use bank's credit card
+
+
+
+### Bivariate Analysis
+
+#### Bivariante Scatter Plot:
+```{r}
+pairs.panels(TB_Data[, -8],
+             method = "pearson", # correlation method
+             hist.col = "yellow",
+             density = TRUE,  # show density plots
+             ellipses = TRUE # show correlation ellipses
+)
+```
+
+Observations:
+1.  Prominent positive correlation between:
+  + Age & Experience
+  + Income & Avg Monthly Spending on Credit card
+  + Income & Mortgage
+  + Mortgage & Avg Monthly Spending on Credit card
+  + Customers with Secutities Account & Customers with CD Account
+  + Avg Monthly Spending on Credit card & Customers with CD Account
+  + Customer using Internet & Customers with CD Account
+2. Prominent negative correlation between:
+  + Income & Family Members
+  + Avg Monthly Spending on Credit card & Family Members
+  + Income & Education
+
+
+#### Correlation Plot
+```{r}
+plot_correlation(TB_Data[, -8])
+```
+
+1. Average spending on Credit Card per month & Income have high positive correlation
+
+#### Check Correlation between Credit Card spend & Income:
+```{r}
+cor.test(TB_Data$CCAvg,TB_Data$Income)$p.value
+```
+1. the CC Avg & Income  p.values << 0.001 indicating these correlation is significant
+
+
+### Chi Square Test
+```{r}
+chisq.test(TB_Data$CCAvg,TB_Data$Income)
+chisq.test(TB_Data$Mortgage,TB_Data$Income)
+chisq.test(TB_Data$CDAccount,TB_Data$Income)
+chisq.test(TB_Data$CDAccount,TB_Data$SecuritiesAccount)
+chisq.test(TB_Data$CDAccount,TB_Data$CreditCard)
+```
+1. We reject the null hypothesis if the p-value that comes out in the result is less than a predetermined significance level, which is 0.05 usually, then we reject the null hypothesis.
+H0: The two variables are independent.
+H1: The two variables relate to each other.
+
+2. The Chi Square test performed between:
+  + CC Avg & Income 
+  + Mortgage & Income
+  + CD Account & Income
+  + CD Account & Securities Account
+  + CD Account & Credit Card
+
+3.  The p-value in all the above cases was less than the predetermined significance level, hence we reject the Null Hypothesis and conclude that the in each test the two variables are in fact dependent and have a positive correlation.
+
+
+## 4. Data Modeling - Clustering 
+
+### Hierarchical Clustering
+
+#### Scale the Data:
+
+```{r}
+TB_Data.Scaled=scale(TB_Data)
+apply(TB_Data.Scaled,2,mean)
+apply(TB_Data.Scaled,2,sd)
+```
+* The variables in the data are not in the scale hence the data needs to be scaled to prevent from any variable dominating its effect on the data and data manipulations.
+
+#### Calculate Euclidean Distance between data points:
+```{r}
+eucDistMatrix.scaled <- dist(x=TB_Data.Scaled[, -8], method = "euclidean")
+
+```
+
+#### Create dissimilarity matric using hclust() and agglomeration method = Ward's Method 
+```{r}
+h_cluster <- hclust(eucDistMatrix.scaled, method = "ward.D2")
+```
+
+#### Plot the dendrogram
+```{r}
+plot(h_cluster, labels = as.character(TB_Data$PersonalLoan), hang = -8)
+```
+1. Dendrogram indicates 3/5 clusters of Personal Loan customers in our data
+
+
+#### Find optimal number of clusters by creating different dendrograms  by varying agglomeration method
+
+```{r}
+h_cluster_euc_comp <- hclust(eucDistMatrix.scaled, method = 'complete')
+plot(h_cluster_euc_comp, labels = as.character(TB_Data$PersonalLoan), 
+     hang = -8, col = 'green')
+
+h_cluster_euc_avg <- hclust(eucDistMatrix.scaled, method = 'average')
+plot(h_cluster_euc_avg, labels = as.character(TB_Data$PersonalLoan), 
+     hang = -8, col = 'red')
+
+manhDistMatrix <- dist(x=TB_Data[, -8], method = "manhattan")
+h_cluster_manh_comp <- hclust(manhDistMatrix, method = 'complete')
+plot(h_cluster_manh_comp, labels = as.character(TB_Data$PersonalLoan), 
+     hang = -8, col = 'blue')
+```
+
+1.  All the dendograms indicate a presence of 4 major clusters
+
+
+#### Add cluster membership to original dataset:
+```{r}
+cluster_name <- cutree(h_cluster, k = 4)
+clg_data_hclusters <- cbind(TB_Data,cluster_name)
+```
+
+
+
+#### Visualise the clusters in two dimensions
+```{r}
+clg_data_hclusters <- clg_data_hclusters[,colSums(clg_data_hclusters != 0) != 0] 
+h_clust_viz_4 <- fviz_cluster(list(data = clg_data_hclusters[,-c(8,13)], 
+                                   cluster = clg_data_hclusters[,8])) + ggtitle("hierarchical 4")
+h_clust_viz_4
+```
+* There is quite an overlap in the 2 Dimensional cluster
+
+#### Number of members in each cluster:
+```{r}
+View(clg_data_hclusters[order(clg_data_hclusters$cluster_name),])
+table(clg_data_hclusters$cluster_name)
+```
+
+#### Observe the differences between identified clusters:
+```{r}
+aggr_mean <- aggregate(clg_data_hclusters[, -8], list(cluster_name), mean)
+```
+
+#### Create cluster profiles
+```{r}
+hcluster.profile <- data.frame(Cluster = aggr_mean[, 8],
+                               PersonalLoan = 
+                                 as.vector(table(cluster_name)),
+                               aggr_mean[, -8])
+
+View(hcluster.profile)
+hcluster.profile
+```
+
+### Insights:
+
+#### CLUSTER 1: 
+1. Has only 7.5% of customers from the data but 46.80 cluster mean
+2. Age mean is 45 almost similar to Cluster 4 and almost similar experience levels
+3. Income level is higher than Cluster 2 but much lower than 3 & 4
+4. Customers are spending an average of 1838 per month on their credit card
+5. Most of the customer having Securities Account belong to this cluster
+6. Customers in this cluster have no COD Account with the bank
+7. The usage on internet in least in this cluster
+8. Only 12% of Customers in this cluster use credit card
+
+#### CLUSTER 2: 
+1. Has 43.5% of customers from the data but just 30.86 of cluster mean.
+2. Age mean is highest & so is the experience in proportion to age as seen in the data
+3. This cluster has least Income level mean 
+4. Avg spending on Credit Card monthly too is lowest in this cluster
+5. Customers in this cluster have no Securities Account with the bank
+6. Customers in this cluster have no COD Account with the bank
+7. Around 45% of Customers in this cluster use credit card
+8. The usage on internet in also low but slightly more than customers of Cluster 3
+9. Mean of customer having a Credit Card is 0.45 
+
+#### CLUSTER 3: 
+1. Has 43% of customers from the data and huge cluster mean of 79.
+2. This cluster has the youngest lot of customers
+3. This cluster has a substantially high Income level mean compared to Cluster 1 & 2
+4. Avg spending on Credit Card monthly is higher in this cluster 
+5. Lowest Education mean in this cluster
+6. Customers in this cluster have no Securities Account with the bank
+7. Customers in this cluster have no COD Account with the bank
+8. Most customers with credit cards are found in this cluster
+
+#### CLUSTER 4: 
+1. Has only 6.5% of customers from the data but highest cluster mean
+2. Age mean is 45 almost similar to Cluster 4 and almost similar experience levels
+3. Highest income levels among all clusters. Mean is in 3 digit.
+4. Highest spend on credit cards. The average monthly spend is 2878
+5. Maximum Customer with highest education level found in this cluster
+6. Customers have no Securities Account but the mean is half compared to Cluster 1
+7. Only cluster where customer hace COD Accounts
+8. Maximum number of customers have a credit card which seems proportional to the CC average monthly spend being higher in this cluster of customers.
+
+
+
+### K -means Clustering
+
+#### Determine the optimum number of clusters (find optimal k)
+
+```{r}
+set.seed <- 1000
+nc=kmeans(TB_Data.Scaled[,8],centers = 2,nstart = 5)
+#nc <- NbClust(TB_Data[, -8], min.nc = 2, max.nc = 6, method = "kmeans")
+#table(nc$Best.n[1, ])
+```
+1. Among all the indices, according to the majority rule, the best number of cluster is 4
+
+
+### Create clusters for k=2, k=3 and k=4 for comparative analysis
+```{r}
+kmeans_cluster_3 <- kmeans(x=TB_Data.Scaled[, -8], centers = 3, nstart = 5)
+kmeans_cluster_4 <- kmeans(x=TB_Data.Scaled[, -8], centers = 4, nstart = 5)
+kmeans_cluster_6 <- kmeans(x=TB_Data.Scaled[, -8], centers = 6, nstart = 5)
+```
+
+### Visualise clusters in 2 dimensions
+```{r}
+k_clust_viz_3 = fviz_cluster(list(data = TB_Data.Scaled[, -8],
+                                  cluster = kmeans_cluster_3$cluster)) + 
+  ggtitle("k = 3")
+k_clust_viz_3
+k_clust_viz_4 = fviz_cluster(list(data = TB_Data.Scaled[, -8],
+                                  cluster = kmeans_cluster_4$cluster)) + 
+  ggtitle("k = 4")
+k_clust_viz_4
+k_clust_viz_6 = fviz_cluster(list(data = TB_Data.Scaled[, -8],
+                                  cluster = kmeans_cluster_6$cluster)) + 
+  ggtitle("k = 6")
+k_clust_viz_6
+```
+
+
+
+### Visualise all 4 clustering plots together (3 from K-Means and 1 from Hierarchical)
+```{r}
+grid.arrange(h_clust_viz_4, k_clust_viz_3, k_clust_viz_4, k_clust_viz_6, nrow = 2)
+
+```
+
+### Create cluster profiles:
+
+#### K3
+```{r}
+aggr_mean_k3 <- aggregate(TB_Data.Scaled[, -8], list(kmeans_cluster_3$cluster), mean)
+k3cluster.profile <- data.frame(Cluster = aggr_mean_k3[, 8],
+                                PersonalLoan= 
+                                  as.vector(table(kmeans_cluster_3$cluster)),
+                                aggr_mean_k3[, -8])
+k3cluster.profile
+```
+1. K3 shows that the Cluster 4 from the Hierarchical cluster as the Group 3 cluster, denoting that this particular group is identified as cluster with the highest mean
+
+
+#### K4
+```{r}
+aggr_mean_k4 <- aggregate(TB_Data.Scaled[, -8], list(kmeans_cluster_4$cluster), mean)
+k4cluster.profile <- data.frame(Cluster = aggr_mean_k4[, 8],
+                                PersonalLoan = 
+                                  as.vector(table(kmeans_cluster_4$cluster)),
+                                aggr_mean_k4[, -8])
+k4cluster.profile
+```
+1. K4 shows a new group of 736 customers as Group 1 with the highest cluster mean followed by the previously identified group of 302 customers.
+2. Together they constitute highest cluster mean i.e 1038 customers (20%)
+
+
+#### K6
+```{r}
+aggr_mean_k6 <- aggregate(TB_Data.Scaled[, -8], list(kmeans_cluster_6$cluster), mean)
+k6cluster.profile <- data.frame(Cluster = aggr_mean_k6[, 8],
+                                PersonalLoan =
+                                  as.vector(table(kmeans_cluster_6$cluster)),
+                                aggr_mean_k6[, -8])
+k6cluster.profile
+```
+1. K6 shows along with previously identified group a new Group 5 with highest cluster mean among all clusters. It has 622 customers.
+
+
+
+## 5.Build CART and Random Forest Model to predict Employee Attrition
+
+#### Model Building - Approach
+
+
+#### Split into train and test
+```{r}
+
+library(caTools)
+set.seed(1000) # To ensure reproducibility
+
+sample= sample.split(TB_Data$PersonalLoan,SplitRatio = 0.7)
+
+train <- subset(TB_Data,sample == TRUE)
+
+test <- subset(TB_Data,sample == FALSE)
+
+nrow(train)
+nrow(test)
+
+```
+1.Train set has 3500 rows
+2.Test set has 1500 rows
+
+### Check that the distribution of the dependent variable is similar in train and test sets
+```{r}
+
+prop.table(table(TB_Data$`PersonalLoan`))
+prop.table(table(train$`PersonalLoan`))
+prop.table(table(test$`PersonalLoan`))
+
+```
+1.The distribution of the dependent variable in the original datat set, train data set & Test data set are similar.
+
+
+
+
+
+#### Build a CART model on the train dataset
+
+```{r}
+r.ctrl = rpart.control(minsplit = 50, minbucket = 10, cp = 0, xval = 10)
+cart_model1 <- rpart(formula = `PersonalLoan`~., data = train, method = "class", control = r.ctrl)
+cart_model1
+printcp(cart_model1)
+plotcp(cart_model1)
+```
+1. Cart Model 1 shows the use of "CCAvg", "CDAccount", "Education" & "Income" in preparing the model.
+2. This model shows 7 nsplit
+
+
+### Build Cart Model 2 ### Model Tuning
+```{r}
+cart_model2 = prune(cart_model1, cp= 0.017 ,"CP")
+printcp(cart_model2)
+cart_model2
+printcp(cart_model2)
+plotcp(cart_model2)
+```
+1. Same variables used as in cart Model 1 to develop Cart Model 2.
+2. This model shows 5 nsplits
+
+## Visualise the decision tree
+```{r}
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+fancyRpartPlot(cart_model1)
+```
+1.The left most node contains  81% of the training data set
+2.The right most node contains 19% of the training data set
+3.The root node is split on Income < 115000
+4. The prominent cluster of customers who could be targeted begins with the high income category who's average spend of Credit Card is high and have CD Accounts with the bank.
+5. The group who dont have high income but high level of education with family members more than 2 is another interesting cluster 
+
+
+### Check the variable importance
+```{r}
+cart_model1$variable.importance
+```
+1. Education followed by Income & Family Members are the most important and influential variables in the model.
+
+
+### Model Validation
+
+
+```{r}
+# Predicting on the train dataset
+train_predict.class_CART <- predict(cart_model1, train, type="class") # Predicted Classes
+train_predict.score_CART <- predict(cart_model1, train) # Predicted Probabilities
+
+# Create confusion matrix for train data predictions
+tab.train_CART = table(train$`PersonalLoan`, train_predict.class_CART)
+tab.train_CART
+
+# Accuracy on train data
+accuracy.train_CART = sum(diag(tab.train_CART)) / sum(tab.train_CART)
+accuracy.train_CART
+```
+* CART Model has 98.68% accuracy on training data set shows no improvement on the baseline accuracy.
+
+
+
+### Model Evaluation
+
+
+```{r}
+# Predicting on the test dataset
+test_predict.class_CART <- predict(cart_model1, test, type="class") # Predicted Classes
+test_predict.score_CART <- predict(cart_model1, test) # Predicted Probabilities
+
+# Create confusion matrix for test data predictions
+tab.test_CART = table(test$`PersonalLoan`, test_predict.class_CART)
+
+# Accuracy on test data
+accuracy.test_CART = sum(diag(tab.test_CART)) / sum(tab.test_CART)
+accuracy.test_CART
+```
+* 98.53% accuracy on the test data set is quite close to the training data set accuracy
+* Although the CART model does not overfit the data but it is not much of an improvement over the baseline model
+
+
+
+### Random Forest Model
+
+#### Build the first RF model
+```{r}
+set.seed(1000)
+library(randomForest)
+rf_model1= randomForest(PersonalLoan~.,data = train,ntree=501,mtry=5,nodesize=10,importance=TRUE)
+```
+
+```{r}
+print(rf_model1)
+
+```
+1. The response is showing 5 or fewer unique values. 
+2. Further regression is not recommended for the Random Forest Model
+
+#### Plot the model to determine the optimum number of trees
+```{r}
+plot(rf_model1)
+print(rf_model1$importance)
+```
+1. The plot reveals that anything more than 50 trees is not of  much value
+2. The Importance matrix shows high "Mean Decrease Accuracy" for  Education,Family Member,Age & CD Account
+
+
+#### Tuning the Random Forest Model
+
+The response from Random Forest Model 1 shows or fewer unique values, hence no further regression needed. 
+
+
+
+```{r}
+sapply(train, class)
+sapply(test, class)
+test$FamilyMember=as.factor(test$FamilyMember)
+```
+
+
+### Model Validation
+```{r}
+# Predicting on the train dataset
+train_predict.class_RF <- predict(rf_model1, train, type="class") # Predicted Classes
+train_predict.score_RF <- predict(rf_model1, train) # Predicted Probabilities
+```
+
+```{r}
+# Create confusion matrix for train data predictions
+tab.train_RF = table(train$PersonalLoan, train_predict.class_RF)
+
+```
+
+```{r}
+# Accuracy on train data
+accuracy.train_RF = sum(diag(tab.train_RF)) / sum(tab.train_RF)
+accuracy.train_RF
+```
+* The accuracy model shows this model is not correct and should be discarded
+
+let's see how the model performs on the test data
+
+### Model Evaluation
+```{r}
+test$FamilyMember= as.numeric(test$FamilyMember)
+# Predicting on the test dataset
+test_predict.class_RF <- predict(rf_model1, test, type="class") # Predicted Classes
+test_predict.score_RF <- predict(rf_model1, test) # Predicted Probabilities
+```
+
+```{r}
+# Create confusion matrix for test data predictions
+tab.test_RF = table(test$PersonalLoan, test_predict.class_RF)
+```
+
+```{r}
+# Accuracy on test data
+accuracy.test_RF = sum(diag(tab.test_RF)) / sum(tab.test_RF)
+accuracy.test_RF
+```
+1. The accuracy of the test data shows this model is not correct and should be discarded
+
+
+
+### Variable Importance Final Model
+```{r}
+varImpPlot(rf_model1, sort = TRUE)
+```
+1. Its worth noting that most variables indicated by the CART Model and final Random Forest Model are almost same with Income, Education, Family Member & CC Avg being the top influences in both the models.
+2. The Random forest generalises over the data in a better way. This randomised feature makes Random Forest more accurate than the decision tree.
+
+
+#### Insights:
+1. Income, Education, Family & Average monthly spend on Credit Card will be the most important in determing which customers will go for the Loan.
+2. The customer with high Income Level fall in the age bracket of 39 to 45. 
+3. Age is not proportional to Income with all customers as we have many high educated customers in lower income bracket.
+4. Also an interesting observation is the customers with higher income possess credit card and spend an average of 2800 per month, and though the number of people with mid level income (comparing in the dataset) do not have credit cards. But the small amount of customers who do, spend an average of 2400 per month. this suggest that the mid-level i.e cluster 3 who form 43% of the base have a propensity to spend more beyond their income and could be the right target customer with high probability to go for a loan.
+* The customer on higher income bracker tend to use internet banking more than others.
+
+
+#### Comparing Models
+```{r}
+Model_Name = c("Baseline", "CART", "Random Forest")
+Train_Accuracy_perc = c(99, accuracy.train_CART*100, accuracy.train_RF*100)
+Test_Accuracy_perc = c(98, accuracy.test_CART*100, accuracy.test_RF*100)
+output = data.frame(Model_Name,Train_Accuracy_perc,Test_Accuracy_perc)
+output
+```
+1. The Random Forest Model is not right for this prediction and will be ignored.
+2. The test Accuracy of the CART model shows a slight improvement on the baseline model and will help us predict the right customers who have high probability of purchasing the loan.
+
+
+
+### Confusion Matrix
+
+We will compare the 2 models that we created earlier -  Cart & Random Forest 
+
+#### Change to factor variable
+```{r}
+train$PersonalLoan=as.factor(train$PersonalLoan)
+levels(test$PersonalLoan)=levels(train$PersonalLoan)
+sapply(train, class)
+sapply(test, class)
+```
+
+
+
+
+### Create Prediction Matrix for both models
+```{r}
+# Predict on test data using cart_model1
+train$PersonalLoan=as.factor(train$PersonalLoan)
+levels(test$PersonalLoan)=levels(train$PersonalLoan)
+sapply(train, class)
+sapply(test, class)
+cart_model1_predict_class = predict(cart_model1, test, type = 'class')
+cart_model1_predict_score = predict(cart_model1, test, type = 'prob')
+
+# Predict on test data using rf_model1
+levels(train)=levels(test)
+str(train)
+str(test)
+rf_model1_predict_class = predict(rf_model1, test, type = 'class')
+rf_model1_predict_score = predict(rf_model1, test,)
+
+```
+
+
+# Create Confusion Matrix for both the models
+```{r error=TRUE}
+library(caret)
+test$PersonalLoan=as.numeric(test$PersonalLoan)
+cart_model1_predict_class=as.numeric(cart_model1_predict_class)
+rf_model1_predict_class=as.numeric(rf_model1_predict_class)
+
+conf_mat_cart_model1 = table(test$PersonalLoan, cart_model1_predict_class)
+
+conf_mat_rf_model1 = table(test$PersonalLoan, rf_model1_predict_class)
+
+
+confusionMatrix(test$PersonalLoan, cart_model1_predict_class)
+confusionMatrix(test$PersonalLoan, rf_model1_predict_class)
+```
+
+
+# Accuracy of models on test data
+```{r}
+# Accuracy of models on test data
+accuracy_cart_model1 = sum(diag(conf_mat_cart_model1)) / sum(conf_mat_cart_model1)
+
+accuracy_rf_model1 = sum(diag(conf_mat_rf_model1)) / sum(conf_mat_rf_model1)
+```
+
+
+# Sensitivity of models on test data
+```{r}
+# Sensitivity of models on test data
+sensitivity_cart_model1 = conf_mat_cart_model1[2,2] / sum(conf_mat_cart_model1[2,])
+
+sensitivity_rf_model1 = conf_mat_rf_model1[2,2] / sum(conf_mat_rf_model1[2,])
+```
+
+
+# Specificity of models on test data
+```{r}
+# Specificity of models on test data
+specificity_cart_model1 = conf_mat_cart_model1[1,1] / sum(conf_mat_cart_model1[1,])
+
+specificity_rf_model1 = conf_mat_rf_model1[1,1] / sum(conf_mat_rf_model1[1,])
+```
+
+
+# Precision of models on test data
+```{r}
+# Precision of models on test data
+precision_cart_model1 = conf_mat_cart_model1[2,2] / sum(conf_mat_cart_model1[2,])
+
+precision_rf_model1 = conf_mat_rf_model1[2,2] / sum(conf_mat_rf_model1[2,])
+```
+
+
+### KS
+```{r}
+# Using library ROCR functions prediction and performance
+library(ROCR)
+
+pred_cart_model1 = prediction(cart_model1_predict_score[,2], test$PersonalLoan) 
+perf_cart_model1= performance(pred_cart_model1,"tpr","fpr")
+ks_cart_model1 = max(attr(perf_cart_model1,'y.values')[[1]] - attr(perf_cart_model1,'x.values')[[1]])
+
+
+test$PersonalLoan=as.numeric(test$PersonalLoan)
+rf_model1_predict_score=as.numeric(rf_model1_predict_score)
+pred_rf_model1 = prediction(rf_model1_predict_score, test$PersonalLoan) 
+perf_rf_model1 = performance(pred_rf_model1,"tpr","fpr")
+ks_rf_model1 = max(attr(perf_rf_model1,'y.values')[[1]] - attr(perf_rf_model1,'x.values')[[1]])
+```
+
+
+### AUC
+```{r}
+# Using library ROCR
+auc_cart_model1 = performance(pred_cart_model1, measure = "auc")
+auc_cart_model1 = auc_cart_model1@y.values[[1]]
+
+
+auc_rf_model1 = performance(pred_rf_model1, measure = "auc")
+auc_rf_model1 = auc_rf_model1@y.values[[1]]
+```
+
+
+### Gini
+```{r}
+# Using library ineq 
+library(ineq)
+gini_cart_model1 = ineq(cart_model1_predict_score[, 2],"gini")
+
+gini_rf_model1 = ineq(rf_model1_predict_score,"gini")
+```
+
+### Concordance - Discordance
+```{r}
+# Concordance - Discordance
+
+library(InformationValue)
+concordance_cart_model1 = Concordance(actuals = ifelse(test$PersonalLoan == 'Yes', 1,0), predictedScores = ifelse(cart_model1_predict_class == 'Yes', 1,0))
+
+concordance_rf_model1 = Concordance(actuals = ifelse(test$PersonalLoan == 'Yes', 1,0), predictedScores = ifelse(rf_model1_predict_class == 'Yes', 1,0))
+
+```
+
+### Comparing models
+```{r}
+cart_model1_metrics = c(accuracy_cart_model1, sensitivity_cart_model1, specificity_cart_model1, precision_cart_model1, ks_cart_model1, auc_cart_model1, gini_cart_model1, concordance_cart_model1$Concordance)
+
+
+rf_model1_metrics = c(accuracy_rf_model1, sensitivity_rf_model1, specificity_rf_model1, precision_rf_model1, ks_rf_model1, auc_rf_model1, gini_rf_model1, concordance_rf_model1$Concordance)
+
+
+cart_model1_metrics=as.matrix(cart_model1_metrics)
+cart_model1_metrics.df=as.data.frame(cart_model1_metrics)
+class(cart_model1_metrics.df)
+
+rf_model1_metrics=as.matrix(rf_model1_metrics)
+rf_model1_metrics.df=as.data.frame(rf_model1_metrics)
+class(rf_model1_metrics.df)
+comparison_table = data.frame(cart_model1_metrics.df, rf_model1_metrics.df)
+
+rownames(comparison_table) = c("Accuracy", "Sensitivity", "Specificity", "Precision", "KS", "Auc", "Gini", "Concordance")
+colnames(comparison_table)=c("Cart Model1","RF Model1")
+comparison_table
+```
+1.The summary shows the following results:
+  + Accuracy for Cart Model 1 is at 98.5
+  + Sensitivity of CartModel1 is at 88.88 while RFModel1 is 0
+  + Specificity of Cart Model1 99
+  + Precision of Cart Model1 is at 88.88 while RFModel1 is 0
+  + KS, AUC & Gini are higher for RFModel1
+  
+FROM THE ABOVE OBSERVATION WE CAN CONCLUDE THAT CART MODEL 1 IS THE RIGHT MODEL FOR USE
+
+
+## ROC Curves
+```{r, error=TRUE}
+test$PersonalLoan=as.numeric(test$PersonalLoan)
+cart_model1_predict_score=as.numeric(cart_model1_predict_score)
+pred_cart_model1 = prediction(cart_model1_predict_score, test$PersonalLoan) 
+perf_cart_model1 = performance(pred_cart_model1,'tpr','fpr')
+plot(perf_cart_model1, main = "ROC Curve" ,colorize = TRUE)
+str(perf_cart_model1)
+```
+1. ROC Curve suggests after 0.1 the outcome is linear and stable without any fluctuations.
+2. There is further need to measure the model performance (eg. Gain & Lift) as we dont have any modesl to analyse and choose.
+3. Also, the Random Model has failed in providing any kind of meaningful Acccuracy, Sensitivity, Specificity or Precision that would be of any consequence to consider it as a model for classifying the right customers for loan.
+
+
+### Conclusion:
+1. The Cart Model is the model best model which can classify the right customers who have higher probability of purchasing the loan.
+2. The model identifies 2 clusters with high cluster mean and they constitute almost 50% of the total customers approached earlier for loan.
+3. Both these cluster have some common features
+  + Higher Income bracket (85,000 to 104,000)
+  + Higher Spending on the Credit Card (2400 to 2900)
+  + They belong to comparatively lower age bracket compared to other cluster (39-
+   to 45)
+  + Family mean of 2 
+  + One of the cluster has maximum CD Account & almost 50% Securities Account holders 
+  + Experience between 14 to 20 years
+  + 79% of one cluster (of 302 customers) have credit card, while only 8% of the larger cluster (2150) possess credit card but have a high propensity to spend on those credit card which shows they would be ideal to sell loans to.
+4. Compared to the 9% success rate, we can have a much better success in selling loans to this customer base without spending much on marketing. We will be able to identify the right cluster who are likely to buy the loan by filtering and analyzing the data by their similarities, commonalities, segmentation and user behaviors which this dataset shows. The CART model will help us classifying these customers.
+
+
